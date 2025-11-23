@@ -11,7 +11,7 @@ import {
 } from "recharts";
 import Link from "next/link";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:5000/";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:5001/";
 const SEGMENT_COLORS = ["#34d399", "#22d3ee", "#a855f7", "#f97316", "#facc15"];
 
 export default function CrmSegmentationPage() {
@@ -23,6 +23,7 @@ export default function CrmSegmentationPage() {
   useEffect(() => {
     const fetchData = async () => {
       try {
+        setLoading(true);
         const res = await fetch(`${API_BASE}/api/segments`);
         if (!res.ok) throw new Error("Failed to fetch segments");
         const data = await res.json();
@@ -30,6 +31,9 @@ export default function CrmSegmentationPage() {
         setCustomers(data.customers || []);
       } catch (err) {
         setError(err.message || "Unexpected error");
+        // Set empty arrays to ensure UI handles empty data gracefully
+        setSummary([]);
+        setCustomers([]);
       } finally {
         setLoading(false);
       }
@@ -59,10 +63,10 @@ export default function CrmSegmentationPage() {
             </p>
           </div>
           <Link
-            href="/blockchain-integrity"
+            href="/upload"
             className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-400 px-6 py-3 font-semibold shadow-xl ring-1 ring-emerald-400/40 transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl"
           >
-            Blockchain Integrity →
+            Upload Data →
           </Link>
         </div>
 
@@ -82,7 +86,7 @@ export default function CrmSegmentationPage() {
                   <div className="h-8 w-1/3 rounded bg-zinc-800" />
                   <div className="h-3 w-2/3 rounded bg-zinc-800" />
                 </div>
-              ) : (
+              ) : segment ? (
                 <>
                   <p className="text-xs uppercase tracking-[0.35em] text-emerald-200/80">
                     {segment.segment}
@@ -92,6 +96,8 @@ export default function CrmSegmentationPage() {
                     Offer: <span className="text-emerald-300">{segment.suggested_offer}</span>
                   </p>
                 </>
+              ) : (
+                <div className="text-zinc-500">No data available</div>
               )}
             </div>
           ))}
@@ -108,7 +114,11 @@ export default function CrmSegmentationPage() {
               </div>
             </div>
             <div className="mt-4 h-72">
-              {summary.length ? (
+              {loading ? (
+                <div className="flex h-full items-center justify-center">
+                  <div className="h-8 w-8 animate-spin rounded-full border-4 border-emerald-500 border-t-transparent"></div>
+                </div>
+              ) : summary.length > 0 ? (
                 <ResponsiveContainer>
                   <PieChart>
                     <Pie data={summary} dataKey="count" nameKey="segment" innerRadius={70} outerRadius={110} paddingAngle={4}>
@@ -122,7 +132,7 @@ export default function CrmSegmentationPage() {
                 </ResponsiveContainer>
               ) : (
                 <div className="flex h-full items-center justify-center text-zinc-500">
-                  {loading ? "Loading chart..." : "No data"}
+                  No data available
                 </div>
               )}
             </div>
@@ -137,7 +147,13 @@ export default function CrmSegmentationPage() {
                 <h2 className="text-2xl font-semibold mt-2">Best Performing Segment</h2>
               </div>
             </div>
-            {bestSegment ? (
+            {loading ? (
+              <div className="mt-6 space-y-4">
+                <div className="h-8 w-1/2 rounded bg-zinc-800 animate-pulse" />
+                <div className="h-4 w-3/4 rounded bg-zinc-800 animate-pulse" />
+                <div className="h-16 rounded-xl bg-zinc-800/50 animate-pulse" />
+              </div>
+            ) : bestSegment ? (
               <div className="mt-6 space-y-4">
                 <h3 className="text-3xl font-bold">{bestSegment.segment}</h3>
                 <p className="text-zinc-400">
@@ -148,7 +164,7 @@ export default function CrmSegmentationPage() {
                 </div>
               </div>
             ) : (
-              <div className="mt-6 text-zinc-500">{loading ? "Scanning segments..." : "No summary available."}</div>
+              <div className="mt-6 text-zinc-500">No data available</div>
             )}
           </div>
         </div>
@@ -176,27 +192,35 @@ export default function CrmSegmentationPage() {
                 </tr>
               </thead>
               <tbody>
-                {(loading ? Array.from({ length: 6 }) : customers).map((customer, idx) => (
-                  <tr
-                    key={customer?.CustomerID || idx}
-                    className="border-t border-white/5 transition-all duration-300 hover:bg-emerald-500/5"
-                  >
-                    {loading ? (
+                {loading ? (
+                  Array.from({ length: 6 }).map((_, idx) => (
+                    <tr key={idx} className="border-t border-white/5">
                       <td colSpan={6} className="py-3">
-                        <div className="h-4 rounded bg-zinc-800" />
+                        <div className="h-4 rounded bg-zinc-800 animate-pulse" />
                       </td>
-                    ) : (
-                      <>
-                        <td className="py-3 pr-4 font-semibold">{customer.CustomerID}</td>
-                        <td className="py-3 pr-4 text-emerald-200">{customer.segment}</td>
-                        <td className="py-3 pr-4 text-zinc-300">{customer.recency} days</td>
-                        <td className="py-3 pr-4 text-zinc-300">{customer.frequency}</td>
-                        <td className="py-3 pr-4 text-zinc-200">${customer.monetary?.toLocaleString()}</td>
-                        <td className="py-3 pr-4 text-emerald-300">{customer.offer}</td>
-                      </>
-                    )}
+                    </tr>
+                  ))
+                ) : customers.length > 0 ? (
+                  customers.map((customer, idx) => (
+                    <tr
+                      key={customer.CustomerID || idx}
+                      className="border-t border-white/5 transition-all duration-300 hover:bg-emerald-500/5"
+                    >
+                      <td className="py-3 pr-4 font-semibold">{customer.CustomerID}</td>
+                      <td className="py-3 pr-4 text-emerald-200">{customer.segment}</td>
+                      <td className="py-3 pr-4 text-zinc-300">{customer.recency} days</td>
+                      <td className="py-3 pr-4 text-zinc-300">{customer.frequency}</td>
+                      <td className="py-3 pr-4 text-zinc-200">${customer.monetary?.toLocaleString()}</td>
+                      <td className="py-3 pr-4 text-emerald-300">{customer.offer}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={6} className="py-6 text-center text-zinc-500">
+                      No customer data available
+                    </td>
                   </tr>
-                ))}
+                )}
               </tbody>
             </table>
             {!loading && !customers.length && (

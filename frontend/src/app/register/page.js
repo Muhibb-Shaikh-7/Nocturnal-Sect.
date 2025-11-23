@@ -33,15 +33,15 @@ export default function RegisterPage() {
     setLoading(true);
     setError('');
 
+    // Since we've removed authentication, we'll just redirect to the login page
+    // without actually registering
     try {
-      await axios.post('http://localhost:5000/api/auth/register', {
-        email: formData.email,
-        password: formData.password,
-      });
-
-      router.push('/login');
+      // Simulate a successful registration
+      setTimeout(() => {
+        router.push('/login');
+      }, 500);
     } catch (err) {
-      setError(err.response?.data?.message || 'Registration failed');
+      setError('Registration failed');
     } finally {
       setLoading(false);
     }

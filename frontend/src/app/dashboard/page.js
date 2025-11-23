@@ -1,7 +1,7 @@
 // src/app/page.js
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
 
 import { motion } from "framer-motion";
@@ -19,102 +19,7 @@ import {
   Legend,
 } from "recharts";
 
-/* -----------------------------
-   Dummy Transactions (schema)
-   Invoice, StockCode, Description, Quantity, InvoiceDate, Price, CustomerID, Country
-   ----------------------------- */
-const dummyTransactions = [
-  {
-    Invoice: 489434,
-    StockCode: "85048",
-    Description: "15CM CHRISTMAS GLASS",
-    Quantity: 12,
-    InvoiceDate: "2009-12-01 07:45:00",
-    Price: 6.95,
-    CustomerID: "13085",
-    Country: "United Kingdom",
-  },
-  {
-    Invoice: 489434,
-    StockCode: "79323P",
-    Description: "PINK CHERRY LIGHTS",
-    Quantity: 12,
-    InvoiceDate: "2009-12-01 07:45:00",
-    Price: 6.75,
-    CustomerID: "13085",
-    Country: "United Kingdom",
-  },
-  {
-    Invoice: 489435,
-    StockCode: "22041",
-    Description: 'RECORD FRAME 7" SINGLE',
-    Quantity: 48,
-    InvoiceDate: "2009-12-02 09:12:00",
-    Price: 2.1,
-    CustomerID: "14320",
-    Country: "United Kingdom",
-  },
-  {
-    Invoice: 489436,
-    StockCode: "21232",
-    Description: "STRAWBERRY CERAMIC",
-    Quantity: 24,
-    InvoiceDate: "2009-12-03 11:03:00",
-    Price: 1.25,
-    CustomerID: "13090",
-    Country: "United Kingdom",
-  },
-  {
-    Invoice: 489437,
-    StockCode: "22350",
-    Description: "CAT BOWL",
-    Quantity: 12,
-    InvoiceDate: "2009-12-04 14:21:00",
-    Price: 2.55,
-    CustomerID: "13085",
-    Country: "United Kingdom",
-  },
-  {
-    Invoice: 600001,
-    StockCode: "50001",
-    Description: "WOODEN TOY CAR",
-    Quantity: 3,
-    InvoiceDate: "2025-11-01 10:00:00",
-    Price: 15.0,
-    CustomerID: "CUST-0001",
-    Country: "United Kingdom",
-  },
-  {
-    Invoice: 600002,
-    StockCode: "50002",
-    Description: "SPORTS WATER BOTTLE",
-    Quantity: 5,
-    InvoiceDate: "2025-11-08 12:00:00",
-    Price: 8.5,
-    CustomerID: "CUST-0002",
-    Country: "United Kingdom",
-  },
-  {
-    Invoice: 600003,
-    StockCode: "50003",
-    Description: "LUX SOFA CUSHION",
-    Quantity: 1,
-    InvoiceDate: "2025-11-15 09:30:00",
-    Price: 45.0,
-    CustomerID: "CUST-0003",
-    Country: "United Kingdom",
-  },
-  {
-    Invoice: 600004,
-    StockCode: "50004",
-    Description: "ELECTRIC KETTLE",
-    Quantity: 2,
-    InvoiceDate: "2025-11-22 15:44:00",
-    Price: 32.0,
-    CustomerID: "CUST-0002",
-    Country: "United Kingdom",
-  },
-];
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:5001/";
 
 /* -----------------------------
    Emerald Mint Theme (reused)
@@ -200,30 +105,113 @@ export default function Page() {
   const [page, setPage] = useState(1);
   const perPage = 6;
   const [q, setQ] = useState("");
-  const txs = dummyTransactions;
+  const [transactions, setTransactions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  // Add state for sales predictions
+  const [predictions, setPredictions] = useState([]);
+  const [predictionsLoading, setPredictionsLoading] = useState(false);
+  const [predictionsError, setPredictionsError] = useState(null);
+
+  // Fetch transactions from backend API
+  useEffect(() => {
+    const fetchTransactions = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch(`${API_BASE}/api/segments`);
+        if (!res.ok) throw new Error("Failed to fetch transactions");
+        const data = await res.json();
+        
+        // Transform customer data to transaction format that matches what the AI model expects
+        const transformedTransactions = data.customers.map((customer, index) => ({
+          Invoice: customer.Invoice || Math.floor(Math.random() * 1000000) + index,
+          StockCode: "N/A",
+          Description: "Customer Transaction",
+          Quantity: customer.frequency || 1,
+          InvoiceDate: new Date(Date.now() - customer.recency * 24 * 60 * 60 * 1000).toISOString(),
+          Price: customer.monetary / (customer.frequency || 1),
+          "Customer ID": customer.CustomerID,
+          Country: "Unknown"
+        }));
+        
+        setTransactions(transformedTransactions);
+      } catch (err) {
+        setError(err.message || "Unexpected error");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchTransactions();
+  }, []);
+
+  // Fetch sales predictions from the AI model
+  useEffect(() => {
+    const fetchPredictions = async () => {
+      // Only fetch predictions if we have transactions
+      if (transactions.length === 0) return;
+      
+      try {
+        setPredictionsLoading(true);
+        setPredictionsError(null);
+        
+        // Prepare data for prediction - use the correct field names
+        const predictionData = transactions.slice(0, 50).map(transaction => ({
+          Invoice: transaction.Invoice,
+          StockCode: transaction.StockCode || "N/A",
+          Description: transaction.Description || "Customer Transaction",
+          Quantity: transaction.Quantity || 1,
+          InvoiceDate: transaction.InvoiceDate || new Date().toISOString(),
+          Price: transaction.Price || 0,
+          "Customer ID": transaction.CustomerID || "unknown",
+          Country: transaction.Country || "Unknown"
+        }));
+        
+        const res = await fetch(`${API_BASE}/api/ai/predict`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(predictionData),
+        });
+        
+        if (!res.ok) throw new Error("Failed to fetch predictions");
+        const data = await res.json();
+        
+        setPredictions(data.predictions || []);
+      } catch (err) {
+        setPredictionsError(err.message || "Failed to load predictions");
+        console.error("Prediction error:", err);
+      } finally {
+        setPredictionsLoading(false);
+      }
+    };
+
+    fetchPredictions();
+  }, [transactions]); // This will run when transactions change
 
   // Filtered transactions (search)
   const filtered = useMemo(() => {
-    if (!q) return txs;
+    if (!q) return transactions;
     const s = q.trim().toLowerCase();
-    return txs.filter((r) => {
+    return transactions.filter((r) => {
       return (
         String(r.Invoice).toLowerCase().includes(s) ||
         (r.StockCode || "").toLowerCase().includes(s) ||
         (r.Description || "").toLowerCase().includes(s) ||
-        (r.CustomerID || "").toLowerCase().includes(s)
+        (r["Customer ID"] || r.CustomerID || "").toLowerCase().includes(s)
       );
     });
-  }, [q, txs]);
+  }, [q, transactions]);
 
   const weekly = useMemo(() => aggregateWeekly(filtered), [filtered]);
   const forecast = useMemo(() => simpleForecast(weekly), [weekly]);
-  const showSkeleton = filtered.length === 0;
+  const showSkeleton = loading || filtered.length === 0;
 
   // RFM-lite top customers
   const customerMap = {};
   filtered.forEach((t) => {
-    const id = t.CustomerID || "unknown";
+    const id = t["Customer ID"] || t.CustomerID || "unknown";
     const amount = (t.Price || 0) * (t.Quantity || 0);
     if (!customerMap[id])
       customerMap[id] = { id, total: 0, orders: 0, last: null };
@@ -290,7 +278,7 @@ export default function Page() {
                 href="/login"
                 className="inline-flex items-center gap-2 rounded-2xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-cyan-200 transition-all duration-300 hover:scale-[1.02]"
               >
-                Blockchain
+                Refresh Data
               </Link>
             </div>
             <div className="flex-1 md:flex-none">
@@ -484,6 +472,109 @@ export default function Page() {
               )}
             </motion.div>
 
+            {/* Add a new section for AI-based predictions */}
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              whileHover={lift(THEME.shadows.purple)}
+              className="relative group overflow-hidden rounded-3xl border border-white/10 bg-zinc-900/70 p-6 shadow-[0_0_100px_rgba(16,185,129,0.12)] backdrop-blur-md transition-all duration-500 ease-out hover:scale-[1.03] hover:-translate-y-1 hover:shadow-[0_0_140px_rgba(16,185,129,0.35)] before:absolute before:inset-0 before:rounded-[inherit] before:bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.15),transparent_60%)] before:opacity-0 group-hover:opacity-80 before:transition-opacity before:duration-500"
+            >
+              <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                <div>
+                  <p className="text-[0.65rem] uppercase tracking-[0.35em] text-emerald-300/80 mb-2">
+                    AI Insights
+                  </p>
+                  <h2 className="text-lg md:text-2xl font-semibold text-white drop-shadow-[0_5px_30px_rgba(16,185,129,0.35)]">
+                    Predictive Sales Analysis
+                  </h2>
+                  <p className="text-sm md:text-base text-zinc-400 mt-1 max-w-xl leading-relaxed">
+                    Forecast based on machine learning model predictions
+                  </p>
+                </div>
+
+                <div className="w-full md:w-64">
+                  <div
+                    className="rounded-3xl border border-white/10 bg-zinc-950/70 p-5 shadow-[inset_0_0_30px_rgba(0,0,0,0.5)] backdrop-blur-md transition-all duration-500 ease-out hover:scale-[1.02] hover:-translate-y-1 hover:shadow-[0_0_80px_rgba(16,185,129,0.35)]"
+                  >
+                    <div className="text-xs uppercase tracking-[0.4em] text-emerald-200/80">
+                      Predicted Revenue
+                    </div>
+                    <div className="text-4xl font-semibold mt-2 text-white drop-shadow-[0_5px_25px_rgba(16,185,129,0.35)] animate-[pulse_3s_ease-in-out_infinite]">
+                      {predictions.length > 0 
+                        ? currency(predictions.reduce((sum, pred) => sum + pred.predicted_revenue, 0))
+                        : "N/A"}
+                    </div>
+                    <div className="text-xs text-zinc-400 mt-2">
+                      From {predictions.length} predictions
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {predictionsLoading ? (
+                <div className="mt-8 space-y-4">
+                  <div className="h-48 rounded-3xl bg-gradient-to-r from-zinc-900/70 via-zinc-800/40 to-zinc-900/70 bg-[length:200%_100%] animate-[pulse_2s_ease-in-out_infinite]" />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="h-3 rounded-full bg-zinc-700/80" />
+                    <div className="h-3 rounded-full bg-zinc-700/80" />
+                    <div className="h-3 rounded-full bg-zinc-700/80 col-span-2" />
+                  </div>
+                </div>
+              ) : predictionsError ? (
+                <div className="mt-6 p-4 rounded-2xl border border-rose-500/40 bg-rose-500/10 text-rose-100">
+                  Error loading predictions: {predictionsError}
+                </div>
+              ) : predictions.length > 0 ? (
+                <div className="mt-6 relative group overflow-hidden rounded-3xl border border-white/10 bg-zinc-950/80 p-4 shadow-[0_0_90px_rgba(16,185,129,0.18)] backdrop-blur-md transition-all duration-500 ease-out hover:scale-[1.03] hover:-translate-y-1 hover:shadow-[0_0_140px_rgba(16,185,129,0.3)] before:absolute before:inset-0 before:bg-[radial-gradient(circle_at_top,_rgba(6,182,212,0.35),transparent_60%)] before:opacity-0 group-hover:opacity-80 before:transition-opacity before:duration-500">
+                  <div style={{ width: "100%", height: 320 }}>
+                    <ResponsiveContainer>
+                      <LineChart 
+                        data={predictions.slice(0, 10).map((pred, idx) => ({
+                          name: `Customer ${pred.CustomerID || idx}`,
+                          revenue: pred.predicted_revenue
+                        }))}
+                      >
+                        <CartesianGrid strokeDasharray="4 4" stroke="#1f2937" />
+                        <XAxis 
+                          dataKey="name" 
+                          stroke="#94a3b8" 
+                          tick={{ fontSize: 12 }}
+                          angle={-45}
+                          textAnchor="end"
+                          height={60}
+                        />
+                        <YAxis 
+                          stroke="#94a3b8" 
+                          tick={{ fontSize: 12 }} 
+                          tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
+                        />
+                        <Tooltip
+                          formatter={(value) => currency(value)}
+                          contentStyle={{
+                            background: "#0f172a",
+                            border: "1px solid rgba(148,163,184,0.3)",
+                            color: "#f8fafc",
+                          }}
+                          itemStyle={{ color: "#f8fafc" }}
+                        />
+                        <Line
+                          dataKey="revenue"
+                          stroke={THEME.accentSoft}
+                          strokeWidth={3}
+                          dot={{ r: 4 }}
+                          activeDot={{ r: 6 }}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-6 text-center text-zinc-400">
+                  No prediction data available
+                </div>
+              )}
+            </motion.div>
+
             {/* transactions table (blue shadow on hover) */}
             <motion.div
               initial={{ opacity: 0, y: 8 }}
@@ -551,7 +642,7 @@ export default function Page() {
                             <td className="py-3 pr-4 font-semibold text-white">
                               {currency(r.Price)}
                             </td>
-                            <td className="py-3 pr-4 text-zinc-300">{r.CustomerID}</td>
+                            <td className="py-3 pr-4 text-zinc-300">{r["Customer ID"] || r.CustomerID}</td>
                             <td className="py-3 pr-4 text-zinc-300">{r.Country}</td>
                           </tr>
                         ))}
@@ -602,7 +693,7 @@ export default function Page() {
                 Top Customers (by spend)
               </div>
               <div className="mt-4 space-y-3">
-                {segments.length === 0
+                {segments.length === 0 || segments[0].name === "No data"
                   ? Array.from({ length: 4 }).map((_, idx) => (
                       <div
                         key={idx}
@@ -652,7 +743,7 @@ export default function Page() {
               <div
                 className="mt-4 rounded-2xl border border-white/10 bg-zinc-950/70 p-4 ring-1 ring-white/5"
               >
-                {segments.length === 0 ? (
+                {segments.length === 0 || segments[0].name === "No data" ? (
                   <div className="space-y-3 animate-pulse">
                     <div className="h-4 w-32 rounded-full bg-zinc-700/70" />
                     <div className="h-3 w-48 rounded-full bg-zinc-700/70" />
@@ -776,6 +867,66 @@ export default function Page() {
               <div className="mt-2 text-xs text-zinc-400">
                 Legend placed below chart for clarity on small screens.
               </div>
+            </motion.div>
+
+            {/* Sales Predictions Section */}
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              whileHover={lift(THEME.shadows.mint)}
+              className="relative group overflow-hidden rounded-3xl border border-white/10 bg-zinc-900/70 p-5 shadow-[0_0_100px_rgba(16,185,129,0.12)] backdrop-blur-md transition-all duration-500 ease-out hover:scale-[1.03] hover:-translate-y-1 hover:shadow-[0_0_140px_rgba(16,185,129,0.35)] before:absolute before:inset-0 before:bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.15),transparent_60%)] before:opacity-0 group-hover:opacity-80 before:transition-opacity before:duration-500"
+            >
+              <h6 className="text-sm uppercase tracking-[0.35em] text-emerald-300/80">
+                AI Predictions
+              </h6>
+              <div className="text-xl font-semibold text-white drop-shadow-[0_0_20px_rgba(16,185,129,0.35)]">
+                Sales Predictions
+              </div>
+              
+              {predictionsLoading ? (
+                <div className="mt-4 space-y-3">
+                  <div className="h-4 w-32 rounded-full bg-zinc-700/70 animate-pulse" />
+                  <div className="h-3 w-48 rounded-full bg-zinc-700/70 animate-pulse" />
+                  <div className="h-10 rounded-xl bg-zinc-800/80 animate-pulse" />
+                </div>
+              ) : predictionsError ? (
+                <div className="mt-4 p-3 rounded-2xl border border-rose-500/40 bg-rose-500/10 text-rose-100 text-sm">
+                  Error: {predictionsError}
+                </div>
+              ) : predictions.length > 0 ? (
+                <div className="mt-4 space-y-3">
+                  <div className="text-sm text-zinc-400">
+                    Predicted revenue for top customers
+                  </div>
+                  {predictions.slice(0, 5).map((prediction, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5/10 p-3 transition-all duration-500 hover:scale-[1.02] hover:-translate-y-1 hover:border-emerald-300/60 hover:shadow-[0_0_60px_rgba(16,185,129,0.35)]"
+                    >
+                      <div>
+                        <div className="font-semibold text-white">
+                          Customer {prediction.CustomerID || "N/A"}
+                        </div>
+                        <div className="text-xs text-zinc-400">
+                          Invoice: {prediction.Invoice}
+                        </div>
+                      </div>
+                      <div className="text-sm font-semibold text-white">
+                        {currency(prediction.predicted_revenue)}
+                      </div>
+                    </div>
+                  ))}
+                  {predictions.length > 5 && (
+                    <div className="text-xs text-zinc-500 text-center pt-2">
+                      Showing top 5 of {predictions.length} predictions
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-4 text-sm text-zinc-400">
+                  No predictions available
+                </div>
+              )}
             </motion.div>
           </aside>
         </main>

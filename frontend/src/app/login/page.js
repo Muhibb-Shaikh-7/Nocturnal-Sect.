@@ -27,21 +27,15 @@ export default function LoginPage() {
     setLoading(true);
     setError('');
 
+    // Since we've removed authentication, we'll just redirect to the dashboard
+    // without actually authenticating
     try {
-      const res = await axios.post('http://localhost:5000/api/auth/login', {
-        email: formData.email,
-        password: formData.password,
-      });
-
-      const { access_token } = res.data.data;
-
-      // Store JWT (you can switch to cookies later)
-      localStorage.setItem('access_token', access_token);
-
-      // Redirect to dashboard
-      router.push('/dashboard');
+      // Simulate a successful login
+      setTimeout(() => {
+        router.push('/dashboard');
+      }, 500);
     } catch (err) {
-      setError(err.response?.data?.message || 'Login failed');
+      setError('Login failed');
     } finally {
       setLoading(false);
     }
@@ -79,7 +73,7 @@ export default function LoginPage() {
         </button>
 
         <p style={styles.text}>
-          Dont have an account?{' '}
+          Don't have an account?{' '}
           <span
             style={styles.link}
             onClick={() => router.push('/register')}

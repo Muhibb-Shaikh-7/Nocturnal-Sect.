@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 
 const API_BASE =
-  process.env.NEXT_PUBLIC_UPLOAD_API_BASE_URL || "http://127.0.0.1:5050";
+  process.env.NEXT_PUBLIC_UPLOAD_API_BASE_URL || "http://localhost:8000";
 const ACCEPTED_EXTENSIONS = [".xlsx", ".xls", ".csv"];
 const ACCEPTED_MIME_TYPES = [
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -15,6 +15,7 @@ const MAX_FILE_BYTES = 3 * 1024 * 1024; // 3 MB
 const MAX_UPLOAD_ROWS = 5000;
 const PREVIEW_ROWS = 10;
 
+// Simplify COLUMN_RULES since we're using server-side validation
 const EXPECTED_COLUMNS = [
   "Invoice",
   "CustomerID",
@@ -108,168 +109,69 @@ const isBlankCell = (value) =>
   (typeof value === "string" && value.trim() === "");
 const isRowEmpty = (row = []) => row.every((cell) => isBlankCell(cell));
 
-const coerceInteger = (value) => {
-  if (typeof value === "number" && Number.isInteger(value)) return value;
-  const parsed = Number(String(value).replace(/,/g, "").trim());
-  return Number.isInteger(parsed) ? parsed : null;
-};
+// Add localStorage helper functions for user data only
+const USER_DATA_STORAGE_KEY = "crmUploadUserData";
+const UPLOAD_HISTORY_STORAGE_KEY = "crmUploadHistory";
 
-const coerceFloat = (value) => {
-  if (typeof value === "number" && Number.isFinite(value)) return Number(value);
-  const parsed = Number(String(value).replace(/,/g, "").trim());
-  return Number.isFinite(parsed) ? parsed : null;
-};
-
-const parseSerialDate = (serial) => {
-  if (!Number.isFinite(serial)) return null;
-  const parsed = XLSX.SSF.parse_date_code(serial);
-  if (!parsed) return null;
-  const iso = new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d));
-  return iso.toISOString().slice(0, 10);
-};
-
-const coerceDate = (value) => {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return value.toISOString().slice(0, 10);
+const saveUserDataToLocalStorage = (userData) => {
+  try {
+    localStorage.setItem(USER_DATA_STORAGE_KEY, JSON.stringify(userData));
+  } catch (error) {
+    console.error("Failed to save user data to localStorage:", error);
   }
-  if (typeof value === "number") {
-    return parseSerialDate(value);
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) return null;
-    const isoCandidate = new Date(trimmed);
-    if (!Number.isNaN(isoCandidate.getTime())) {
-      return isoCandidate.toISOString().slice(0, 10);
-    }
-    const match = trimmed.match(/^([0-9]{1,2})[\/\-]([0-9]{1,2})[\/\-]([0-9]{2,4})$/);
-    if (match) {
-      const day = Number(match[1]);
-      const month = Number(match[2]);
-      const year = Number(match[3].length === 2 ? `20${match[3]}` : match[3]);
-      if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
-        const iso = new Date(Date.UTC(year, month - 1, day));
-        return iso.toISOString().slice(0, 10);
-      }
-    }
+};
+
+const loadUserDataFromLocalStorage = () => {
+  try {
+    const savedData = localStorage.getItem(USER_DATA_STORAGE_KEY);
+    return savedData ? JSON.parse(savedData) : null;
+  } catch (error) {
+    console.error("Failed to load user data from localStorage:", error);
   }
   return null;
 };
 
-const coerceString = (value) => {
-  if (value === null || value === undefined) return "";
-  return String(value).trim();
+const clearUserDataFromLocalStorage = () => {
+  try {
+    localStorage.removeItem(USER_DATA_STORAGE_KEY);
+  } catch (error) {
+    console.error("Failed to clear user data from localStorage:", error);
+  }
 };
 
-const validateHeaders = (headers) => {
-  const errors = [];
-  if (headers.length !== EXPECTED_COLUMNS.length) {
-    errors.push(
-      `Header mismatch. Expected ${EXPECTED_COLUMNS.length} columns but found ${headers.length}.`
-    );
-    return errors;
+const saveUploadToHistory = (uploadData) => {
+  try {
+    const history = loadUploadHistoryFromLocalStorage() || [];
+    const newEntry = {
+      ...uploadData,
+      id: Date.now(), // Simple ID based on timestamp
+      timestamp: new Date().toISOString(),
+    };
+    
+    // Keep only the last 10 uploads
+    const updatedHistory = [newEntry, ...history.slice(0, 9)];
+    localStorage.setItem(UPLOAD_HISTORY_STORAGE_KEY, JSON.stringify(updatedHistory));
+  } catch (error) {
+    console.error("Failed to save upload to history:", error);
   }
-  EXPECTED_COLUMNS.forEach((expected, index) => {
-    const actual = normalizeHeader(headers[index]);
-    if (actual !== expected) {
-      errors.push(
-        `Column ${index + 1} must be '${expected}' (found '${actual || ""}').`
-      );
-    }
-  });
-  return errors;
 };
 
-const validateDataRows = (rows) => {
-  const sanitized = [];
-  const errors = [];
-  const warnings = [];
-
-  rows.forEach((cells, rowIndex) => {
-    if (isRowEmpty(cells)) return;
-    const record = {};
-    const rowNumber = rowIndex + 2; // account for header row
-    let rowHasError = false;
-
-    EXPECTED_COLUMNS.forEach((column, columnIndex) => {
-      const rule = COLUMN_RULES[column];
-      const cell = cells[columnIndex];
-      const blank = isBlankCell(cell);
-
-      if (blank) {
-        record[column] = "";
-        if (rule.required) {
-          errors.push(`Empty required field '${column}' in row ${rowNumber}.`);
-          rowHasError = true;
-        }
-        return;
-      }
-
-      if (rule.type === "int") {
-        const value = coerceInteger(cell);
-        if (value === null) {
-          errors.push(`Row ${rowNumber}: '${column}' must be an integer.`);
-          rowHasError = true;
-        } else {
-          record[column] = value;
-        }
-        return;
-      }
-
-      if (rule.type === "float") {
-        const value = coerceFloat(cell);
-        if (value === null) {
-          errors.push(`Row ${rowNumber}: '${column}' must be a valid number.`);
-          rowHasError = true;
-        } else {
-          record[column] = value;
-        }
-        return;
-      }
-
-      if (rule.type === "date") {
-        const value = coerceDate(cell);
-        if (!value) {
-          errors.push(
-            `Row ${rowNumber}: '${column}' must be a valid date (YYYY-MM-DD or Excel date cell).`
-          );
-          rowHasError = true;
-        } else {
-          record[column] = value;
-        }
-        return;
-      }
-
-      const text = coerceString(cell);
-      if (rule.required && !text) {
-        errors.push(`Row ${rowNumber}: '${column}' cannot be blank.`);
-        rowHasError = true;
-      } else {
-        record[column] = column === "Currency" ? text.toUpperCase() : text;
-      }
-    });
-
-    if (!rowHasError) {
-      if (record.Currency && record.Currency.length !== 3) {
-        warnings.push(
-          `Row ${rowNumber}: Currency '${record.Currency}' should be a 3-letter ISO code.`
-        );
-      }
-      sanitized.push(record);
-    }
-  });
-
-  if (!sanitized.length && !errors.length) {
-    errors.push("Uploaded file does not contain any data rows.");
+const loadUploadHistoryFromLocalStorage = () => {
+  try {
+    const savedData = localStorage.getItem(UPLOAD_HISTORY_STORAGE_KEY);
+    return savedData ? JSON.parse(savedData) : [];
+  } catch (error) {
+    console.error("Failed to load upload history from localStorage:", error);
   }
+  return [];
+};
 
-  if (sanitized.length > MAX_UPLOAD_ROWS) {
-    errors.push(
-      `Too many rows (${sanitized.length}). Maximum supported rows per upload is ${MAX_UPLOAD_ROWS}.`
-    );
+const clearUploadHistoryFromLocalStorage = () => {
+  try {
+    localStorage.removeItem(UPLOAD_HISTORY_STORAGE_KEY);
+  } catch (error) {
+    console.error("Failed to clear upload history from localStorage:", error);
   }
-
-  return { rows: sanitized, errors, warnings };
 };
 
 const formatBytes = (bytes) => {
@@ -278,21 +180,6 @@ const formatBytes = (bytes) => {
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const value = bytes / 1024 ** index;
   return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
-};
-
-const triggerDownload = (fileName, base64, mimeType) => {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  const blob = new Blob([bytes], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = fileName;
-  anchor.click();
-  URL.revokeObjectURL(url);
 };
 
 export default function UploadPage() {
@@ -308,6 +195,36 @@ export default function UploadPage() {
   const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
 
+  // State for upload history
+  const [uploadHistory, setUploadHistory] = useState([]);
+
+  // Add a ref to store the actual file object
+  const fileRef = useRef(null);
+
+  // Load user data from localStorage on component mount
+  useEffect(() => {
+    const savedUserData = loadUserDataFromLocalStorage();
+    if (savedUserData) {
+      setUploaderName(savedUserData.uploaderName || "");
+      setUploaderEmail(savedUserData.uploaderEmail || "");
+    }
+  }, []);
+
+  // Load upload history from localStorage on component mount
+  useEffect(() => {
+    const history = loadUploadHistoryFromLocalStorage();
+    setUploadHistory(history);
+  }, []);
+
+  // Save user data to localStorage whenever it changes
+  useEffect(() => {
+    const userDataToSave = {
+      uploaderName,
+      uploaderEmail,
+    };
+    saveUserDataToLocalStorage(userDataToSave);
+  }, [uploaderName, uploaderEmail]);
+
   const resetState = useCallback(() => {
     setStatus("idle");
     setErrors([]);
@@ -316,6 +233,8 @@ export default function UploadPage() {
     setPreviewRows([]);
     setSelectedFile(null);
     setServerMessage(null);
+    // Don't clear uploaderName and uploaderEmail as they're persisted in localStorage
+    clearUserDataFromLocalStorage();
   }, []);
 
   const handleValidation = useCallback(
@@ -329,70 +248,68 @@ export default function UploadPage() {
       if (!file) {
         setStatus("idle");
         setSelectedFile(null);
+        fileRef.current = null;
         return;
       }
+
+      // Store the actual file in the ref
+      fileRef.current = file;
+
+      // Store file metadata in state (not the actual file object)
+      const fileMetadata = {
+        name: file.name,
+        size: file.size,
+        type: file.type,
+      };
 
       const extMatch = file.name ? file.name.match(/\.[0-9a-zA-Z]+$/) : null;
       const ext = extMatch ? extMatch[0].toLowerCase() : "";
       if (!ACCEPTED_EXTENSIONS.includes(ext)) {
         setErrors(["Only .xlsx, .xls, and .csv files are allowed."]);
         setStatus("invalid");
-        setSelectedFile(file);
+        setSelectedFile(fileMetadata);
         return;
       }
 
       if (file.type && !ACCEPTED_MIME_TYPES.includes(file.type)) {
         setErrors([`Unsupported MIME type: ${file.type}`]);
         setStatus("invalid");
-        setSelectedFile(file);
+        setSelectedFile(fileMetadata);
         return;
       }
 
       if (file.size > MAX_FILE_BYTES) {
         setErrors(["File exceeds the 3 MB limit."]);
         setStatus("invalid");
-        setSelectedFile(file);
+        setSelectedFile(fileMetadata);
         return;
       }
 
-      setSelectedFile(file);
+      setSelectedFile(fileMetadata);
       setStatus("validating");
 
       try {
-        const buffer = await file.arrayBuffer();
-        const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
-        const sheetName = workbook.SheetNames?.[0];
-        if (!sheetName) {
-          throw new Error("The workbook does not contain any sheets.");
-        }
-        const sheet = workbook.Sheets[sheetName];
-        const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-        if (!matrix.length) {
-          throw new Error("Uploaded file contains no rows.");
-        }
-        const headers = (matrix[0] || []).map((cell) => normalizeHeader(cell));
-        const headerErrors = validateHeaders(headers);
-        if (headerErrors.length) {
-          setErrors(headerErrors);
-          setStatus("invalid");
-          return;
+        // Send file to FastAPI service for validation
+        const formData = new FormData();
+        formData.append("file", file);
+        
+        const response = await fetch(`${API_BASE}/upload/validate`, {
+          method: "POST",
+          body: formData,
+        });
+        
+        const result = await response.json();
+        
+        if (!response.ok) {
+          throw new Error(result.detail || result.message || "Validation failed.");
         }
 
-        const { rows, errors: rowErrors, warnings: rowWarnings } = validateDataRows(
-          matrix.slice(1)
-        );
-        if (rowErrors.length) {
-          setErrors(rowErrors);
-          setStatus("invalid");
-          return;
-        }
-
-        setDataset({ rows });
-        setWarnings(rowWarnings);
-        setPreviewRows(rows.slice(0, PREVIEW_ROWS));
+        // Process the validation result
+        setDataset({ rows: result.preview });
+        setPreviewRows(result.preview.slice(0, PREVIEW_ROWS));
         setStatus("ready");
       } catch (error) {
-        setErrors([error.message || "Failed to parse the spreadsheet."]);
+        setErrors([error.message || "Failed to validate the spreadsheet."]);
         setStatus("invalid");
       }
     },
@@ -431,12 +348,21 @@ export default function UploadPage() {
     setIsDownloadingTemplate(true);
     setErrors([]);
     try {
-      const response = await fetch(`${API_BASE}/api/uploads/template`);
+      const response = await fetch(`${API_BASE}/upload/template`);
       if (!response.ok) {
         throw new Error("Unable to download the template right now.");
       }
-      const body = await response.json();
-      triggerDownload(body.fileName, body.base64, body.mimeType);
+      
+      // Handle file download
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'crm_upload_template.xlsx';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
     } catch (error) {
       setErrors([error.message || "Failed to download template."]);
       setStatus("invalid");
@@ -453,49 +379,49 @@ export default function UploadPage() {
 
     const sanitizedName = uploaderName.trim();
     const sanitizedEmail = uploaderEmail.trim();
-    const payload = {
-      columns: EXPECTED_COLUMNS,
-      data: dataset.rows,
-      meta: {
-        originalFilename: selectedFile?.name || "unknown.xlsx",
-        uploadTime: new Date().toISOString(),
-        warnings,
-      },
-      uploader: {
-        name: sanitizedName || "anonymous",
-        email: sanitizedEmail || "anonymous@example.com",
-        id: sanitizedEmail || sanitizedName || "anonymous",
-      },
-    };
+    
+    // Create FormData object for multipart/form-data submission
+    const formData = new FormData();
+    formData.append("file", fileRef.current);
+    formData.append("uploader_name", sanitizedName || "Anonymous");
+    formData.append("uploader_email", sanitizedEmail || "anonymous@example.com");
 
     try {
-      const response = await fetch(`${API_BASE}/api/uploads/ingest`, {
+      const response = await fetch(`${API_BASE}/upload/submit`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
+        body: formData,   // ✅ Send as multipart/form-data
       });
       const body = await response.json();
-      if (!response.ok || body.success === false) {
-        const incomingErrors = Array.isArray(body.errors) && body.errors.length
-          ? body.errors
-          : [body.message || body.detail || "Upload failed."];
-        setErrors(incomingErrors);
-        setStatus(body.errors ? "invalid" : "error");
+      if (!response.ok) {
+        const errorMessage = body.detail || body.message || "Upload failed.";
+        setErrors([errorMessage]);
+        setStatus("error");
         return;
       }
       setStatus("success");
       setServerMessage({
-        message: body.message,
-        uploadId: body.uploadId,
-        rowCount: body.rowCount,
+        message: body.message || "Upload complete.",
+        uploadId: "N/A", // FastAPI doesn't return an upload ID
+        rowCount: dataset.rows.length,
       });
+      
+      // Save successful upload to history
+      saveUploadToHistory({
+        uploaderName: sanitizedName,
+        uploaderEmail: sanitizedEmail,
+        fileName: fileRef.current?.name,
+        rowCount: dataset.rows.length,
+        message: body.message || "Upload complete.",
+      });
+      
+      // Update the history state
+      const history = loadUploadHistoryFromLocalStorage();
+      setUploadHistory(history);
     } catch (error) {
       setErrors([error.message || "Unable to upload data right now."]);
       setStatus("error");
     }
-  }, [dataset, selectedFile, uploaderEmail, uploaderName, warnings]);
+  }, [dataset, uploaderEmail, uploaderName, setUploadHistory]);
 
   const statusDetails = STATUS_META[status] || STATUS_META.idle;
   const canUpload = status === "ready" && Boolean(dataset?.rows?.length);
@@ -509,6 +435,11 @@ export default function UploadPage() {
     if (status === "validating") return "border-amber-400/50 bg-amber-500/5";
     return "border-white/10 bg-zinc-900/60";
   }, [status, isDragging]);
+
+  const clearHistory = () => {
+    clearUploadHistoryFromLocalStorage();
+    setUploadHistory([]);
+  };
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-zinc-950 via-zinc-900 to-black text-white px-6 lg:px-12 py-10">
@@ -524,14 +455,23 @@ export default function UploadPage() {
               and upload JSON-only payloads to the Flask API for secondary validation, auditing, and storage.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={handleDownloadTemplate}
-            disabled={isDownloadingTemplate}
-            className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-400 px-6 py-3 font-semibold shadow-xl ring-1 ring-emerald-400/40 transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isDownloadingTemplate ? "Preparing sample…" : "Download sample file"}
-          </button>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => window.history.back()}
+              className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-zinc-800/50 px-6 py-3 font-semibold text-white transition hover:bg-zinc-700/50"
+            >
+              ← Back
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadTemplate}
+              disabled={isDownloadingTemplate}
+              className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-400 px-6 py-3 font-semibold shadow-xl ring-1 ring-emerald-400/40 transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isDownloadingTemplate ? "Preparing sample…" : "Download sample file"}
+            </button>
+          </div>
         </header>
 
         <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
@@ -758,7 +698,7 @@ export default function UploadPage() {
                     <tr key={`preview-row-${rowIndex}`} className="border-b border-white/5 last:border-b-0">
                       {EXPECTED_COLUMNS.map((column) => (
                         <td key={`${rowIndex}-${column}`} className="py-2 px-4 text-zinc-100">
-                          {row[column] ?? ""}
+                          {row[column] !== undefined ? row[column] : ""}
                         </td>
                       ))}
                     </tr>
@@ -769,6 +709,59 @@ export default function UploadPage() {
           ) : (
             <p className="mt-4 rounded-2xl border border-dashed border-white/10 bg-black/20 px-6 py-8 text-center text-sm text-zinc-400">
               No preview available yet. Upload and validate a file to see the first {PREVIEW_ROWS} rows here.
+            </p>
+          )}
+        </div>
+
+        {/* Upload History Section */}
+        <div className="rounded-3xl border border-white/10 bg-zinc-950/70 p-6 shadow-2xl">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 className="text-xl font-semibold">Upload History</h3>
+              <p className="text-sm text-zinc-400">
+                Recent uploads are saved in your browser's local storage.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={clearHistory}
+              disabled={uploadHistory.length === 0}
+              className="rounded-2xl border border-white/10 px-4 py-2 text-sm text-white/80 transition hover:border-white/30 disabled:opacity-50"
+            >
+              Clear History
+            </button>
+          </div>
+          
+          {uploadHistory.length > 0 ? (
+            <div className="mt-4 overflow-auto rounded-2xl border border-white/5">
+              <table className="w-full text-sm text-left">
+                <thead className="text-zinc-400 text-[0.7rem] uppercase tracking-[0.3em]">
+                  <tr>
+                    <th className="py-3 px-4 border-b border-white/10">File</th>
+                    <th className="py-3 px-4 border-b border-white/10">Name</th>
+                    <th className="py-3 px-4 border-b border-white/10">Email</th>
+                    <th className="py-3 px-4 border-b border-white/10">Rows</th>
+                    <th className="py-3 px-4 border-b border-white/10">Date</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {uploadHistory.map((upload) => (
+                    <tr key={upload.id} className="border-b border-white/5 last:border-b-0">
+                      <td className="py-2 px-4 text-zinc-100">{upload.fileName || "N/A"}</td>
+                      <td className="py-2 px-4 text-zinc-100">{upload.uploaderName || "Anonymous"}</td>
+                      <td className="py-2 px-4 text-zinc-100">{upload.uploaderEmail || "N/A"}</td>
+                      <td className="py-2 px-4 text-zinc-100">{upload.rowCount || 0}</td>
+                      <td className="py-2 px-4 text-zinc-100">
+                        {new Date(upload.timestamp).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="mt-4 rounded-2xl border border-dashed border-white/10 bg-black/20 px-6 py-8 text-center text-sm text-zinc-400">
+              No upload history yet. Upload a file to see it appear here.
             </p>
           )}
         </div>

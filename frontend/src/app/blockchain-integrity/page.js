@@ -1,118 +1,148 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:5050";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:5001/";
 
 export default function BlockchainIntegrityPage() {
-  const [integrity, setIntegrity] = useState({ file_hash: "", merkle_root: "" });
+  const [blockchainData, setBlockchainData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [copied, setCopied] = useState("");
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    const loadIntegrity = async () => {
+    const fetchData = async () => {
       try {
+        setLoading(true);
         const res = await fetch(`${API_BASE}/api/blockchain`);
-        if (!res.ok) throw new Error("Failed to load blockchain integrity");
+        if (!res.ok) throw new Error("Failed to fetch blockchain data");
         const data = await res.json();
-        setIntegrity(data);
+        setBlockchainData(data);
       } catch (err) {
         setError(err.message || "Unexpected error");
+        setBlockchainData(null);
       } finally {
         setLoading(false);
       }
     };
 
-    loadIntegrity();
+    fetchData();
   }, []);
-
-  const copyValue = async (value, field) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(field);
-      setTimeout(() => setCopied(""), 2000);
-    } catch (err) {
-      setError("Unable to copy to clipboard");
-    }
-  };
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-zinc-950 via-zinc-900 to-black text-white px-6 lg:px-12 py-10">
-      <section className="max-w-4xl mx-auto space-y-8">
+      <section className="max-w-6xl mx-auto space-y-8">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className="text-cyan-300/80 text-xs uppercase tracking-[0.4em]">
-              Blockchain Integrity
+            <p className="text-emerald-300/80 text-xs uppercase tracking-[0.4em]">
+              Data Integrity
             </p>
             <h1 className="text-4xl font-black tracking-tight mt-2">
-              Proof-of-Data Verification
+              Blockchain Verification
             </h1>
-            <p className="text-zinc-400 mt-2">
-              Validate the CRM dataset with tamper-proof SHA256 fingerprints and Merkle proofs.
+            <p className="text-zinc-400 mt-2 max-w-2xl">
+              Verify the authenticity and integrity of your CRM data through blockchain-based hashing.
             </p>
           </div>
           <Link
-            href="/crm-segmentation"
-            className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-400 to-emerald-400 px-6 py-3 font-semibold shadow-xl ring-1 ring-cyan-300/40 transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl"
+            href="/dashboard"
+            className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-400 px-6 py-3 font-semibold shadow-xl ring-1 ring-emerald-400/40 transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl"
           >
-            ← CRM Console
+            ← Back to Dashboard
           </Link>
         </div>
 
-        <div className="grid gap-6 md:grid-cols-2">
-          {[
-            { label: "Dataset Hash", value: integrity.file_hash, field: "file_hash" },
-            { label: "Merkle Root", value: integrity.merkle_root, field: "merkle_root" },
-          ].map((item) => (
-            <div
-              key={item.field}
-              className="rounded-2xl border border-white/10 bg-zinc-900/60 p-5 shadow-xl transition-all duration-500 hover:scale-[1.02] hover:shadow-2xl"
-            >
-              <p className="text-xs uppercase tracking-[0.35em] text-cyan-200/80">
-                {item.label}
-              </p>
-              <div className="mt-3 break-all font-mono text-sm text-zinc-200">
-                {loading ? <div className="h-6 rounded bg-zinc-800 animate-pulse" /> : item.value || "—"}
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="rounded-2xl border border-white/10 bg-zinc-900/60 p-6 shadow-xl transition-all duration-500 hover:scale-[1.02] hover:shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.35em] text-emerald-200/80">
+                  File Hash
+                </p>
+                <h2 className="text-2xl font-semibold mt-2">SHA256 Fingerprint</h2>
               </div>
-              <button
-                disabled={!item.value}
-                onClick={() => copyValue(item.value, item.field)}
-                className="mt-4 inline-flex items-center gap-2 rounded-xl border border-white/10 px-4 py-2 text-sm font-medium text-white transition-all duration-300 hover:scale-[1.02] hover:border-cyan-300/60 hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Copy
-                {copied === item.field && <span className="text-cyan-300">Copied!</span>}
-              </button>
             </div>
-          ))}
+            <div className="mt-4">
+              {loading ? (
+                <div className="h-6 w-full rounded bg-zinc-800 animate-pulse" />
+              ) : error ? (
+                <div className="text-rose-400">{error}</div>
+              ) : blockchainData ? (
+                <div className="rounded-2xl border border-white/10 bg-black/30 p-4 font-mono text-sm break-all">
+                  {blockchainData.file_hash}
+                </div>
+              ) : (
+                <div className="text-zinc-500">No data available</div>
+              )}
+            </div>
+            <p className="text-zinc-400 text-sm mt-3">
+              This SHA256 hash represents the cryptographic fingerprint of your entire dataset file.
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-zinc-900/60 p-6 shadow-xl transition-all duration-500 hover:scale-[1.02] hover:shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.35em] text-emerald-200/80">
+                  Merkle Root
+                </p>
+                <h2 className="text-2xl font-semibold mt-2">Transaction Tree</h2>
+              </div>
+            </div>
+            <div className="mt-4">
+              {loading ? (
+                <div className="h-6 w-full rounded bg-zinc-800 animate-pulse" />
+              ) : error ? (
+                <div className="text-rose-400">{error}</div>
+              ) : blockchainData ? (
+                <div className="rounded-2xl border border-white/10 bg-black/30 p-4 font-mono text-sm break-all">
+                  {blockchainData.merkle_root}
+                </div>
+              ) : (
+                <div className="text-zinc-500">No data available</div>
+              )}
+            </div>
+            <p className="text-zinc-400 text-sm mt-3">
+              The Merkle root provides a compact representation of all individual transactions.
+            </p>
+          </div>
         </div>
 
         <div className="rounded-2xl border border-white/10 bg-zinc-950/80 p-6 shadow-xl transition-all duration-500 hover:scale-[1.02] hover:shadow-2xl">
-          <div className="flex items-center gap-3">
-            <div className="h-12 w-12 rounded-full border border-cyan-400/40 bg-cyan-400/10 flex items-center justify-center animate-pulse">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-                strokeWidth="1.5"
-                stroke="currentColor"
-                className="w-6 h-6 text-cyan-300"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-              </svg>
-            </div>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-              <p className="text-xs uppercase tracking-[0.35em] text-cyan-200/80">
-                Verification Status
+              <p className="text-xs uppercase tracking-[0.35em] text-emerald-200/80">
+                Verification Process
               </p>
-              <h2 className="text-2xl font-semibold">Dataset Anchored</h2>
-              <p className="text-zinc-400 text-sm mt-1">
-                Every transaction row rolls into the Merkle tree above. Recompute locally to validate authenticity.
+              <h2 className="text-2xl font-semibold mt-1">How It Works</h2>
+            </div>
+          </div>
+          
+          <div className="mt-6 grid gap-4 md:grid-cols-3">
+            <div className="rounded-2xl border border-white/5 bg-black/20 p-5">
+              <div className="text-emerald-400 text-2xl font-bold mb-3">1</div>
+              <h3 className="font-semibold text-lg mb-2">Data Hashing</h3>
+              <p className="text-zinc-400 text-sm">
+                Each transaction is cryptographically hashed using SHA256 algorithm.
+              </p>
+            </div>
+            
+            <div className="rounded-2xl border border-white/5 bg-black/20 p-5">
+              <div className="text-emerald-400 text-2xl font-bold mb-3">2</div>
+              <h3 className="font-semibold text-lg mb-2">Merkle Tree</h3>
+              <p className="text-zinc-400 text-sm">
+                Hashes are combined in pairs to form a binary tree structure.
+              </p>
+            </div>
+            
+            <div className="rounded-2xl border border-white/5 bg-black/20 p-5">
+              <div className="text-emerald-400 text-2xl font-bold mb-3">3</div>
+              <h3 className="font-semibold text-lg mb-2">Immutable Record</h3>
+              <p className="text-zinc-400 text-sm">
+                The Merkle root can be stored on-chain for tamper-proof verification.
               </p>
             </div>
           </div>
-          {error && <div className="mt-4 text-rose-400">{error}</div>}
         </div>
       </section>
     </main>
